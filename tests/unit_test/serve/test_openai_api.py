@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sglang_omni.admission import QueueFullError
 from sglang_omni.client import Client, ClientError, GenerateChunk
 from sglang_omni.client.audio import encode_pcm
+from sglang_omni.client.client import build_params
 from sglang_omni.client.types import GenerateRequest
 from sglang_omni.pipeline.coordinator import Coordinator
 from sglang_omni.proto import (
@@ -1231,6 +1232,19 @@ def test_chat_request_preserves_explicit_default_sampling_values() -> None:
         "top_k",
         "top_p",
     ]
+
+
+def test_chat_request_keeps_thinker_length_penalty_in_stage_params() -> None:
+    req = ChatCompletionRequest(
+        model="openbmb/MiniCPM-o-4_5",
+        messages=[{"role": "user", "content": "hello"}],
+        stage_params={"thinker": {"length_penalty": 1.5}},
+    )
+
+    gen_req = build_chat_generate_request(req)
+
+    assert gen_req.stage_params == {"thinker": {"length_penalty": 1.5}}
+    assert build_params(gen_req)["stage_params"]["thinker"]["length_penalty"] == 1.5
 
 
 def test_chat_request_does_not_mark_null_sampling_params_explicit() -> None:
