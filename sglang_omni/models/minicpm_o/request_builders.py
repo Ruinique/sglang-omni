@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -30,32 +29,6 @@ if TYPE_CHECKING:
     from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 else:
     pass
-
-
-def resolve_thinker_length_penalty(params: dict[str, Any]) -> float:
-    """Read stage_params.thinker.length_penalty. Missing or null means 1.0."""
-    thinker_params = (params.get("stage_params") or {}).get(THINKER_STAGE) or {}
-    penalty = thinker_params.get("length_penalty", 1.0)
-    if penalty is None:
-        return 1.0
-    else:
-        pass
-    message = (
-        "stage_params.thinker.length_penalty must be a finite number "
-        f"greater than 0, got {penalty!r}"
-    )
-    if isinstance(penalty, bool) or not isinstance(penalty, (int, float)):
-        raise ValueError(message)
-    else:
-        pass
-    try:
-        penalty_value = float(penalty)
-    except OverflowError:
-        raise ValueError(message) from None
-    if not math.isfinite(penalty_value) or penalty_value <= 0:
-        raise ValueError(message)
-    else:
-        return penalty_value
 
 
 def resolve_sampling_seed(params: dict[str, Any]) -> int | None:
@@ -171,7 +144,6 @@ def build_sglang_thinker_request(
 
     max_new_tokens = params.get("max_new_tokens", 2048)
     temperature = params.get("temperature", 0.0)
-    resolve_thinker_length_penalty(params)
 
     sampling_params = SamplingParams(
         max_new_tokens=max_new_tokens,

@@ -9,12 +9,15 @@ import torch
 
 from sglang_omni.model_runner.base import ModelRunner
 from sglang_omni.model_runner.thinker_model_runner import ThinkerModelRunner
-from sglang_omni.models.minicpm_o.request_builders import resolve_thinker_length_penalty
+from sglang_omni.models.minicpm_o.routing import THINKER_STAGE
 
 if TYPE_CHECKING:
     from sglang.srt.layers.logits_processor import LogitsProcessorOutput
     from sglang.srt.managers.schedule_batch import ScheduleBatch
-    from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
+    from sglang.srt.model_executor.forward_batch_info import (
+        CaptureHiddenMode,
+        ForwardBatch,
+    )
 
     from sglang_omni.model_runner.model_worker import ModelWorker
     from sglang_omni.scheduling.sglang_backend.output_processor import (
@@ -59,6 +62,7 @@ class MiniCPMOThinkerModelRunner(ThinkerModelRunner):
         self.video_token_id = -1
         self.audio_token_id = -1
         self.eos_token_ids = eos_token_ids
+        self.eos_token_id_cache: torch.Tensor | None = None
 
         self.capture_hidden_mode = (
             CaptureHiddenMode.FULL
@@ -88,31 +92,40 @@ class MiniCPMOThinkerModelRunner(ThinkerModelRunner):
         logits = logits_output.next_token_logits
         for row_idx, sched_req in enumerate(requests):
             params = sched_req.data.stage_payload.request.params or {}
-            penalty = resolve_thinker_length_penalty(params)
-            if penalty == 1.0:
+            thinker_params = (params.get("stage_params") or {}).get(THINKER_STAGE) or {}
+            length_penalty = thinker_params.get("length_penalty", 1.0)
+            if length_penalty == 1.0:
                 continue
             else:
-                pass
-            eos_logits = logits[row_idx, self.eos_token_ids]
-            logits[row_idx, self.eos_token_ids] = torch.where(
-                eos_logits > 0,
-                eos_logits / penalty,
-                eos_logits * penalty,
-            )
+                eos_ids = self.eos_token_id_tensor(logits.device)
+                eos_logits = logits[row_idx, eos_ids]
+                logits[row_idx, eos_ids] = torch.where(
+                    eos_logits > 0,
+                    eos_logits / length_penalty,
+                    eos_logits * length_penalty,
+                )
 
-    def lookahead_eligible(self, batch: ScheduleBatch) -> bool:
-        if not super().lookahead_eligible(batch):
-            return False
+    def eos_token_id_tensor(self, device: torch.device) -> torch.Tensor:
+        """Keep the EOS ids on the logits device so indexing needs no H2D copy."""
+        if self.eos_token_id_cache is None:
+            self.eos_token_id_cache = torch.tensor(self.eos_token_ids, device=device)
         else:
             pass
-        # note (ruinique): sample_lookahead skips process_sampling_logits.
-        return all(
-            resolve_thinker_length_penalty(
-                req.omni_data.stage_payload.request.params or {}
-            )
-            == 1.0
-            for req in batch.reqs
-        )
+        return self.eos_token_id_cache
+
+    def sample_lookahead(
+        self,
+        logits_output: LogitsProcessorOutput,
+        forward_batch: ForwardBatch,
+        requests: list[SchedulerRequest],
+    ) -> torch.Tensor:
+        """Apply length_penalty before the parent's lookahead sampling.
+
+        The penalty reads only the current logits and a per-request constant,
+        not output history, so the one-step-early lookahead sample matches sync.
+        """
+        self.process_sampling_logits(logits_output, requests)
+        return super().sample_lookahead(logits_output, forward_batch, requests)
 
     def post_process_outputs(
         self,
